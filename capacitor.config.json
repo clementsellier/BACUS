@@ -1,0 +1,8 @@
+{
+  "appId": "com.bacus.app",
+  "appName": "BACUS",
+  "webDir": "dist",
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
+}
