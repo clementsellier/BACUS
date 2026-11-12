@@ -333,3 +333,5 @@ h1.title { font-size: 22px; font-weight: 750; letter-spacing: -0.01em; }
 .toast .live-dot { margin-top: 5px; }
 .toast.move .live-dot { background: var(--warn); }
 .toast .x { color: var(--muted); font-size: 18px; line-height: 1; padding: 0 2px; }
+
+.card.demo { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 7%, var(--surface)); }

@@ -53,6 +53,7 @@
   function confirm() {
     const qty = num(draft.qty);
     if (!qty) return;
+    if (isDemo) settings.positions = []; // la première vraie ligne remplace l'exemple
     addPosition(draft.asset, qty, num(draft.cost));
     draft = null;
   }
@@ -60,11 +61,23 @@
     settings.positions = settings.positions.filter((p) => p.id !== id);
     editing = null;
   }
+  const EXAMPLE = [
+    { id: 'MSFT', qty: 6 }, { id: 'MC.PA', qty: 4 }, { id: 'TTE.PA', qty: 30 },
+    { id: 'VNQ', qty: 15 }, { id: 'BTC-USD', qty: 0.04 }, { id: 'GC=F', qty: 0.5 },
+  ];
   function example() {
-    settings.positions = [
-      { id: 'MSFT', qty: 6, cost: null }, { id: 'MC.PA', qty: 4, cost: null }, { id: 'TTE.PA', qty: 30, cost: null },
-      { id: 'VNQ', qty: 15, cost: null }, { id: 'BTC-USD', qty: 0.04, cost: null }, { id: 'GC=F', qty: 0.5, cost: null },
-    ];
+    settings.positions = EXAMPLE.map((p) => ({ ...p, cost: null, demo: true }));
+  }
+  // Portefeuille d'exemple : lignes marquées « demo », ou exemple chargé avant l'ajout de ce marqueur.
+  const isDemo = $derived(
+    settings.positions.length > 0 &&
+      (settings.positions.every((p) => p.demo) ||
+        (settings.positions.length === EXAMPLE.length && EXAMPLE.every((e) => settings.positions.some((p) => p.id === e.id && p.cost == null)))),
+  );
+  function clearAll() {
+    if (!isDemo && !window.confirm('Supprimer toutes les lignes de votre portefeuille ?')) return;
+    settings.positions = [];
+    editing = null;
   }
   const verdict = (c) => (c == null ? '—' : c < 0.3 ? 'Bonne' : c < 0.6 ? 'Moyenne' : 'Faible');
   const bar = (v, max) => `${Math.min(100, (Math.abs(v) / (max || 1)) * 100)}%`;
@@ -83,6 +96,16 @@
       <input class="input" inputmode="decimal" placeholder={`Prix d’achat unitaire${draft.asset.cur ? ' en ' + draft.asset.cur : ''} (facultatif)`} bind:value={draft.cost} />
       <button class="btn" onclick={confirm} disabled={!num(draft.qty)}>Ajouter</button>
     </div>
+  </div>
+{/if}
+
+{#if isDemo}
+  <div class="card demo">
+    <span style="flex:1;min-width:200px">
+      <b>Portefeuille d’exemple.</b>
+      <span class="muted">Il disparaît dès que vous ajoutez votre première ligne.</span>
+    </span>
+    <button class="chip" onclick={clearAll}>Retirer l’exemple</button>
   </div>
 {/if}
 
@@ -107,7 +130,10 @@
   {:then hist}
     {@const r = compute(hist)}
     {#if !r}
-      <div class="card error">Cotations indisponibles pour ces lignes.</div>
+      <div class="card error">
+        Cotations indisponibles pour ces lignes.
+        <button class="link" onclick={clearAll}>Vider le portefeuille</button>
+      </div>
     {:else}
       <div>
         <div class="muted small">Valeur totale</div>
@@ -174,7 +200,10 @@
       </div>
 
       <div>
-        <div class="section-title"><h2>Lignes</h2></div>
+        <div class="section-title">
+          <h2>Lignes</h2>
+          {#if !isDemo}<button style="color:var(--down)" onclick={clearAll}>Tout supprimer</button>{/if}
+        </div>
         <div class="card flush">
           {#each r.items as it (it.a.id)}
             {@const gain = it.p.cost ? it.localPrice / it.p.cost - 1 : null}
@@ -218,6 +247,9 @@
       </div>
     {/if}
   {:catch}
-    <div class="card error">Impossible de charger les cotations du portefeuille.</div>
+    <div class="card error">
+      Impossible de charger les cotations du portefeuille.
+      <button class="link" onclick={clearAll}>Vider le portefeuille</button>
+    </div>
   {/await}
 {/if}

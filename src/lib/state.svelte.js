@@ -83,6 +83,8 @@ export function toggleFav(asset) {
 
 export function addPosition(asset, qty, cost = null) {
   remember(asset);
+  // La première vraie ligne remplace le portefeuille d'exemple.
+  if (settings.positions.length && settings.positions.every((p) => p.demo)) settings.positions = [];
   const p = settings.positions.find((x) => x.id === asset.id);
   if (p) {
     // moyenne pondérée du prix d'achat quand on renforce une ligne
