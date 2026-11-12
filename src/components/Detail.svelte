@@ -2,9 +2,10 @@
   import Chart from './Chart.svelte';
   import Chips from './Chips.svelte';
   import Icon from './Icon.svelte';
-  import { settings, closeDetail, toggleFav } from '../lib/state.svelte.js';
-  import { loadDetail, detailRanges } from '../lib/data.js';
-  import { rsi, annVol, maxDrawdown, trend, bigMoves, forecast, backtest } from '../lib/analytics.js';
+  import { settings, closeDetail, toggleFav, addCompare, addPosition, goTab } from '../lib/state.svelte.js';
+  import { FACTORS, COINS } from '../lib/catalog.js';
+  import { loadDetail, detailRanges, history } from '../lib/data.js';
+  import { rsi, annVol, maxDrawdown, trend, bigMoves, forecast, backtest, correlations } from '../lib/analytics.js';
   import { causes } from '../lib/news.js';
   import { price, pct, dir, date } from '../lib/format.js';
 
@@ -18,7 +19,7 @@
 
   const HORIZONS = housing
     ? [{ id: 2, label: '6 mois' }, { id: 4, label: '1 an' }, { id: 8, label: '2 ans' }]
-    : asset.kind === 'crypto'
+    : asset.kind === 'crypto' || asset.kind === 'coin'
       ? [{ id: 7, label: '7 jours' }, { id: 30, label: '30 jours' }, { id: 90, label: '90 jours' }]
       : [{ id: 5, label: '1 semaine' }, { id: 21, label: '1 mois' }, { id: 63, label: '3 mois' }];
   let horizon = $state(HORIZONS[1].id);
@@ -105,6 +106,42 @@
   const rsiText = (v) => (v >= 70 ? 'suracheté' : v <= 30 ? 'survendu' : 'zone neutre');
   const calib = (c) => (Math.abs(c - 0.8) <= 0.1 ? 'bien calibré' : c < 0.7 ? 'intervalle trop étroit par le passé' : 'intervalle plutôt prudent');
   const fav = $derived(settings.favorites.includes(asset.id));
+
+  // Équivalent utilisable par les outils (comparaison, portefeuille) : tout sauf les indices immobiliers.
+  const tool = housing ? null : asset.kind === 'crypto' ? (COINS.find((c) => c.s === `${asset.s}-USD`) ?? null) : asset;
+  const holdable = tool && (['stock', 'reit', 'coin'].includes(tool.kind) || (tool.kind === 'macro' && tool.cur));
+  let qty = $state('');
+  let added = $state(false);
+  function compareIt() {
+    addCompare(tool);
+    goTab('lab', 'compare');
+  }
+  function hold() {
+    const v = parseFloat(String(qty).replace(',', '.'));
+    if (!(v > 0)) return;
+    addPosition(tool, v);
+    qty = '';
+    added = true;
+  }
+
+  // Sensibilités : avec quels grands facteurs cet actif évolue-t-il, et dans quel sens ?
+  let sens = $state(null);
+  $effect(() => {
+    if (housing || !data) return;
+    const model = data.model;
+    const fs = FACTORS.filter((f) => f.id !== asset.id && f.id !== tool?.id);
+    let stale = false;
+    history(fs.map((f) => ({ id: f.id, s: f.id, cur: null, kind: 'index' })), null, '2y')
+      .then((h) => {
+        if (stale) return;
+        const ok = fs.filter((f) => h.has(f.id));
+        const cs = correlations(model, ok.map((f) => h.get(f.id).pts));
+        sens = ok.map((f, k) => ({ ...f, c: cs[k] })).filter((x) => x.c != null).sort((a, b) => Math.abs(b.c) - Math.abs(a.c));
+      })
+      .catch(() => {});
+    return () => (stale = true);
+  });
+  const strength = (c) => (Math.abs(c) >= 0.6 ? 'fortement' : Math.abs(c) >= 0.3 ? 'modérément' : 'faiblement');
 </script>
 
 <div class="sheet">
@@ -112,7 +149,7 @@
     <button class="icon-btn" onclick={closeDetail} aria-label="Retour"><Icon name="back" /></button>
     <div class="name">{asset.name}</div>
     {#if !housing}
-      <button class="icon-btn" class:on={fav} onclick={() => toggleFav(asset.id)} aria-label="Favori">
+      <button class="icon-btn" class:on={fav} onclick={() => toggleFav(asset)} aria-label="Favori">
         <Icon name={fav ? 'star-fill' : 'star'} />
       </button>
     {/if}
@@ -136,6 +173,16 @@
         {#if housing}<div class="muted small">Dernier trimestre publié : {date(data.points[data.points.length - 1].t)}</div>{/if}
         {#if asset.hint}<p class="muted small" style="margin-top:6px">{asset.hint}</p>{/if}
       </div>
+
+      {#if tool}
+        <div class="toolbar">
+          <button class="chip" onclick={compareIt}>Comparer à d’autres actifs</button>
+          {#if holdable}
+            <input class="input" style="max-width:150px;flex:0 1 150px" inputmode="decimal" placeholder="Quantité détenue" bind:value={qty} />
+            <button class="chip" class:on={added} onclick={hold}>{added ? 'Ajouté au portefeuille ✓' : '+ Portefeuille'}</button>
+          {/if}
+        </div>
+      {/if}
 
       <div class="toolbar">
         <Chips options={ranges} bind:value={range} label="Période" />
@@ -189,6 +236,29 @@
             <span class="v num" style="font-size:14.5px">{fmt(ind.hi)}</span>
             <span class="muted small num">{fmt(ind.lo)}</span>
           </div>
+        </div>
+      {/if}
+
+      {#if sens?.length}
+        {@const top = sens[0]}
+        {@const opp = sens.find((x) => x.c <= -0.2)}
+        <div class="card">
+          <div class="section-title"><h2>À quoi cet actif est-il sensible ?</h2></div>
+          {#each sens as x (x.id)}
+            <div class="div-row">
+              <span class="div-label">{x.label}{#if x.hint}<span class="muted small" style="margin-left:5px">· {x.hint}</span>{/if}</span>
+              <span class="div-track">
+                <span class="div-fill" style="background:var(--{x.c >= 0 ? 'c1' : 'c2'});width:{Math.abs(x.c) * 50}%;{x.c >= 0 ? 'left:50%' : 'right:50%'}"></span>
+              </span>
+              <b class="num">{x.c > 0 ? '+' : x.c < 0 ? '−' : ''}{Math.abs(x.c).toFixed(2).replace('.', ',')}</b>
+            </div>
+          {/each}
+          <p class="muted small" style="margin-top:8px">
+            {asset.name.split(/ [—(]/)[0]} évolue {strength(top.c)} {top.c >= 0 ? 'dans le même sens que' : 'à l’inverse de'}
+            « {top.label.toLowerCase()} »{#if opp && opp !== top}, et plutôt à l’inverse de « {opp.label.toLowerCase()} »{/if}.
+            Corrélation des variations hebdomadaires sur 2 ans, de −1 (opposé) à +1 (identique), mesurée dans votre devise.
+            Un lien statistique passé n’est pas une garantie.
+          </p>
         </div>
       {/if}
 

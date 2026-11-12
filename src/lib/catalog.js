@@ -123,6 +123,72 @@ export const MACRO = [
   m('DX-Y.NYB', 'Indice dollar (DXY)', null, 'Force du dollar face aux grandes devises.'),
 ];
 
+// Cryptomonnaies cotées chez Yahoo : même circuit que les actions, pratique pour comparer et additionner.
+const c = (s, name) => ({ id: s, s, name, region: 'world', cur: 'USD', kind: 'coin' });
+export const COINS = [
+  c('BTC-USD', 'Bitcoin'), c('ETH-USD', 'Ethereum'), c('SOL-USD', 'Solana'), c('XRP-USD', 'XRP'),
+  c('BNB-USD', 'BNB'), c('ADA-USD', 'Cardano'), c('DOGE-USD', 'Dogecoin'),
+];
+
+export const UNIVERSE = [...INDICES, ...STOCKS, ...REITS, ...COINS, ...MACRO];
+
+export const CLASSES = {
+  stock: { label: 'Actions', color: '--c1' },
+  index: { label: 'Indices', color: '--c5' },
+  reit: { label: 'Immobilier coté', color: '--c2' },
+  coin: { label: 'Crypto', color: '--c3' },
+  macro: { label: 'Or et matières premières', color: '--c4' },
+};
+
+// Facteurs auxquels on mesure la sensibilité d'un actif.
+export const FACTORS = [
+  { id: '^GSPC', label: 'Actions américaines', hint: 'S&P 500' },
+  { id: '^VIX', label: 'Peur du marché', hint: 'VIX' },
+  { id: '^TNX', label: 'Taux d’intérêt US', hint: '10 ans' },
+  { id: 'DX-Y.NYB', label: 'Dollar', hint: 'indice DXY' },
+  { id: 'BZ=F', label: 'Pétrole', hint: 'Brent' },
+  { id: 'GC=F', label: 'Or', hint: 'once' },
+  { id: 'BTC-USD', label: 'Bitcoin', hint: '' },
+];
+
+// Panel observé pour mesurer l'onde de choc d'un événement. unit : pct | pts | bp
+const sh = (id, name, group, unit = 'pct') => ({ id, s: id, name, group, unit, cur: null, kind: 'index' });
+export const SHOCK_SET = [
+  sh('^GSPC', 'S&P 500', 'Actions'),
+  sh('^IXIC', 'Nasdaq', 'Actions'),
+  sh('^FCHI', 'CAC 40', 'Actions'),
+  sh('^STOXX50E', 'Euro Stoxx 50', 'Actions'),
+  sh('^N225', 'Nikkei 225', 'Actions'),
+  sh('EEM', 'Pays émergents', 'Actions'),
+  sh('ITA', 'Défense (ETF US)', 'Secteurs'),
+  sh('XLE', 'Énergie (ETF US)', 'Secteurs'),
+  sh('REET', 'Immobilier coté', 'Secteurs'),
+  sh('GC=F', 'Or', 'Refuges et matières'),
+  sh('BZ=F', 'Pétrole Brent', 'Refuges et matières'),
+  sh('DX-Y.NYB', 'Dollar', 'Refuges et matières'),
+  sh('BTC-USD', 'Bitcoin', 'Refuges et matières'),
+  sh('^VIX', 'VIX', 'Stress', 'pts'),
+  sh('^TNX', 'Taux US 10 ans', 'Stress', 'bp'),
+];
+
+// Actifs habituellement exposés à chaque facteur d'actualité.
+export const THEME_ASSETS = {
+  geo: ['GC=F', 'BZ=F', '^VIX', 'LMT', 'RHM.DE', 'HO.PA'],
+  vote: ['^GSPC', 'DX-Y.NYB', '^TNX', '^VIX'],
+  rates: ['^TNX', 'EURUSD=X', 'GC=F', '^IXIC', 'VNQ'],
+  trade: ['EEM', '^HSI', 'MC.PA', '7203.T', 'DX-Y.NYB'],
+  energy: ['BZ=F', 'TTE.PA', 'XOM', 'SHEL.L'],
+  tech: ['^IXIC', 'NVDA', 'ASML.AS', 'TSM', 'MSFT'],
+};
+
+// Pays pour lesquels on dispose d'un taux de crédit immobilier (BCE ou FRED).
+export const MORTGAGE = [
+  { cc: 'FR', name: 'France', src: 'ecb', cur: 'EUR' },
+  { cc: 'DE', name: 'Allemagne', src: 'ecb', cur: 'EUR' },
+  { cc: 'ES', name: 'Espagne', src: 'ecb', cur: 'EUR' },
+  { cc: 'US', name: 'États-Unis', src: 'fred', cur: 'USD' },
+];
+
 // Prix de l'immobilier résidentiel — indices BIS (2010 = 100) publiés par FRED, trimestriels.
 const h = (cc, name, region) => ({
   id: `Q${cc}N628BIS`, s: `Q${cc}N628BIS`, name, region, cur: null, kind: 'housing', flag: cc,

@@ -28,8 +28,6 @@
   }
 </script>
 
-<h1 class="title">Cryptomonnaies</h1>
-
 {#await global then g}
   {#if g}
     <div class="grid">

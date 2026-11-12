@@ -18,7 +18,7 @@ const fxSymbol = (from, to) => `${from}${to}=X`;
 /** Les indices restent en points ; seuls les actifs cotés dans une devise sont convertis. */
 const needsFx = (asset, cur) => asset.cur && asset.kind !== 'index' && baseCur(asset.cur) !== cur;
 
-async function spark(symbols, range, interval, ttl) {
+export async function spark(symbols, range, interval, ttl) {
   const out = {};
   const chunks = [];
   for (let k = 0; k < symbols.length; k += 15) chunks.push(symbols.slice(k, k + 15));
@@ -35,7 +35,7 @@ async function spark(symbols, range, interval, ttl) {
   return out;
 }
 
-function toPoints(raw) {
+export function toPoints(raw) {
   if (!raw?.timestamp) return [];
   const pts = [];
   for (let k = 0; k < raw.timestamp.length; k++) {
@@ -88,6 +88,84 @@ export async function quotes(assets, period, cur) {
   }
   return res;
 }
+
+/**
+ * Historiques journaliers d'une liste d'actifs Yahoo.
+ * Pour chaque actif : `pts` (convertis dans `cur`, si fourni) et `local` (devise de cotation).
+ */
+export async function history(assets, cur, range = '2y') {
+  const fxNeeded = new Set();
+  if (cur) for (const a of assets) if (needsFx(a, cur)) fxNeeded.add(fxSymbol(baseCur(a.cur), cur));
+  const raw = await spark([...new Set(assets.map((a) => a.s)), ...fxNeeded], range, '1d', 900);
+  const out = new Map();
+  for (const a of assets) {
+    const k = unit(a.cur);
+    const local = toPoints(raw[a.s]).map((p) => ({ t: p.t, v: p.v * k }));
+    if (local.length < 30) continue;
+    let pts = local;
+    let shown = a.kind === 'index' || !a.cur ? null : baseCur(a.cur);
+    if (cur && needsFx(a, cur)) {
+      const conv = convert(local, toPoints(raw[fxSymbol(baseCur(a.cur), cur)]));
+      if (conv) {
+        pts = conv;
+        shown = cur;
+      }
+    }
+    out.set(a.id, { pts, local, cur: shown });
+  }
+  return out;
+}
+
+const KIND = { EQUITY: 'stock', ETF: 'stock', MUTUALFUND: 'stock', INDEX: 'index', CRYPTOCURRENCY: 'coin', CURRENCY: 'macro', FUTURE: 'macro' };
+const TYPE_LABEL = { EQUITY: 'Action', ETF: 'ETF', MUTUALFUND: 'Fonds', INDEX: 'Indice', CRYPTOCURRENCY: 'Crypto', CURRENCY: 'Devise', FUTURE: 'Contrat à terme' };
+
+/** Recherche universelle : n'importe quelle action, ETF, indice ou crypto connu de Yahoo Finance. */
+export async function searchAssets(q) {
+  const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=8&newsCount=0&lang=fr-FR`;
+  const d = await get(url, { ttl: 600 });
+  return (d.quotes || [])
+    .filter((x) => KIND[x.quoteType] && x.symbol)
+    .map((x) => ({
+      id: x.symbol, s: x.symbol, name: x.longname || x.shortname || x.symbol, kind: KIND[x.quoteType],
+      sector: [TYPE_LABEL[x.quoteType], x.exchDisp].filter(Boolean).join(' · '), region: 'world', custom: true, type: x.quoteType,
+    }));
+}
+
+/** Complète un résultat de recherche avec sa devise de cotation. */
+export async function resolveAsset(a) {
+  if (a.cur !== undefined) return a;
+  const d = await get(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(a.s)}?range=1d&interval=1d`, { ttl: 86400 });
+  const m = d.chart.result[0].meta;
+  return { ...a, cur: a.type === 'CURRENCY' || a.kind === 'index' ? null : m.currency || null };
+}
+
+/** Taux moyen des nouveaux crédits immobiliers, mensuel, en %. */
+export async function mortgageRates(country) {
+  if (country.src === 'fred') {
+    const out = [];
+    for (const p of await fredSeries('MORTGAGE30US')) {
+      const d = new Date(p.t * 1000);
+      const key = d.getUTCFullYear() * 12 + d.getUTCMonth();
+      if (out.length && out[out.length - 1].key === key) out[out.length - 1] = { ...p, key };
+      else out.push({ ...p, key });
+    }
+    return out.map(({ t, v }) => ({ t, v }));
+  }
+  const url = `https://data-api.ecb.europa.eu/service/data/MIR/M.${country.cc}.B.A2C.AM.R.A.2250.EUR.N?format=csvdata&detail=dataonly&startPeriod=2012-01`;
+  const lines = (await get(url, { ttl: 86400, type: 'text' })).trim().split(/\r?\n/);
+  const head = lines[0].split(',');
+  const iT = head.indexOf('TIME_PERIOD'), iV = head.indexOf('OBS_VALUE');
+  const out = [];
+  for (const line of lines.slice(1)) {
+    const f = line.split(',');
+    const v = parseFloat(f[iV]);
+    if (Number.isFinite(v)) out.push({ t: Date.parse(f[iT] + '-01T00:00:00Z') / 1000, v });
+  }
+  if (!out.length) throw new Error('Taux indisponibles');
+  return out;
+}
+
+export const housingSeries = (cc) => fredSeries(`Q${cc}N628BIS`);
 
 /** Classement des cryptomonnaies par capitalisation, directement dans la devise choisie. */
 export async function cryptoMarkets(cur) {
@@ -219,7 +297,7 @@ export async function loadDetail(asset, range, cur) {
   else if (range === '5y') points = (await fetchSeries('5y', '1wk', 3600)).pts;
   else points = slice(daily, SPAN[range]);
   return {
-    points, model: daily, ppy: 252, cur: shown, prev,
+    points, model: daily, ppy: asset.kind === 'coin' ? 365 : 252, cur: shown, prev,
     intraday: range === '1d' || range === '5d',
   };
 }

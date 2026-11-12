@@ -1,7 +1,7 @@
 <script>
   import Row from '../components/Row.svelte';
   import Spark from '../components/Spark.svelte';
-  import { settings, ui, openDetail } from '../lib/state.svelte.js';
+  import { settings, lastVisit, goTab, findAsset, openDetail } from '../lib/state.svelte.js';
   import { INDICES, STOCKS, REITS, MACRO, REGIONS, PERIODS, inRegion } from '../lib/catalog.js';
   import { quotes, cryptoMarkets } from '../lib/data.js';
   import { loadNews, ago } from '../lib/news.js';
@@ -10,12 +10,34 @@
 
   const indices = $derived(inRegion(INDICES, settings.region));
   const stocks = $derived(inRegion(STOCKS, settings.region));
-  const favs = $derived([...INDICES, ...STOCKS, ...REITS].filter((a) => settings.favorites.includes(a.id)));
+  const favs = $derived(settings.favorites.map(findAsset).filter(Boolean));
   const load = $derived(
     quotes([...new Set([...indices, ...stocks, ...MACRO, ...favs])], settings.period, settings.currency),
   );
   const crypto = $derived(cryptoMarkets(settings.currency).catch(() => []));
   const news = $derived(loadNews().catch(() => []));
+
+  // Relevé des cours à chaque visite espacée d'au moins 3 h, pour pouvoir résumer ce qui a changé la fois suivante.
+  const GAP = 3 * 3600 * 1000;
+  $effect(() => {
+    const cur = settings.currency;
+    load
+      .then((q) => {
+        const prices = Object.fromEntries([...q].map(([id, x]) => [id, x.price]));
+        if (!settings.snapshot || settings.snapshot.cur !== cur || Date.now() - settings.snapshot.at > GAP)
+          settings.snapshot = { at: Date.now(), cur, prices };
+      })
+      .catch(() => {});
+  });
+  function since(q) {
+    if (!lastVisit || lastVisit.cur !== settings.currency || Date.now() - lastVisit.at < GAP) return null;
+    const moves = [...indices, ...MACRO, ...favs]
+      .filter((a, k, all) => all.findIndex((b) => b.id === a.id) === k && lastVisit.prices[a.id] && q.get(a.id))
+      .map((a) => ({ a, change: q.get(a.id).price / lastVisit.prices[a.id] - 1 }))
+      .sort((x, y) => Math.abs(y.change) - Math.abs(x.change))
+      .slice(0, 6);
+    return moves.length ? { moves, at: lastVisit.at } : null;
+  }
 
   const regionLabel = $derived(REGIONS.find((r) => r.id === settings.region).label);
   const periodLong = $derived(PERIODS.find((p) => p.id === settings.period).long);
@@ -82,6 +104,20 @@
     <div class="card error">Les cotations ne répondent pas. Vérifiez la connexion puis actualisez.</div>
   {/if}
 
+  {@const sv = since(q)}
+  {#if sv}
+    <div class="card">
+      <div class="section-title"><h2>Depuis votre dernière visite</h2><span class="muted small">{ago(sv.at)}</span></div>
+      <div class="filters" style="padding:0;flex-wrap:wrap">
+        {#each sv.moves as m (m.a.id)}
+          <button class="chip" onclick={() => openDetail(m.a)}>
+            {m.a.name.split(/ [—(]/)[0]} <b class="num {dir(m.change)}">{pct(m.change, 1)}</b>
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
   <div>
     <div class="section-title"><h2>Facteurs clés</h2></div>
     <div class="grid">
@@ -138,7 +174,7 @@
 
   <div class="two">
     <div>
-      <div class="section-title"><h2>Indices</h2><button onclick={() => (ui.tab = 'stocks')}>Tout voir</button></div>
+      <div class="section-title"><h2>Indices</h2><button onclick={() => goTab('markets', 'stocks')}>Tout voir</button></div>
       <div class="card flush">
         {#each indices.slice(0, 7) as a (a.id)}
           {@const x = q.get(a.id)}
@@ -178,7 +214,7 @@
 {/await}
 
 <div>
-  <div class="section-title"><h2>À la une</h2><button onclick={() => (ui.tab = 'news')}>Toute l’actualité</button></div>
+  <div class="section-title"><h2>À la une</h2><button onclick={() => goTab('news')}>Toute l’actualité</button></div>
   {#await news}
     <div class="skel" style="height:120px"></div>
   {:then items}

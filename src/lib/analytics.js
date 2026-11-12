@@ -182,3 +182,159 @@ export function pulse(changes, vix) {
     score >= 70 ? 'Optimisme' : score >= 55 ? 'Plutôt confiant' : score >= 45 ? 'Indécis' : score >= 30 ? 'Prudence' : 'Tension';
   return { score, label, breadth, avg, up: ok.filter((c) => c > 0).length, total: ok.length };
 }
+
+// ---------------------------------------------------------------------------
+// Comparaison entre actifs : alignement des calendriers, corrélations, chocs
+// ---------------------------------------------------------------------------
+
+export const dayOf = (t) => Math.floor(t / 86400);
+
+/**
+ * Aligne plusieurs séries sur un calendrier commun (les marchés n'ont ni les mêmes jours fériés
+ * ni les mêmes week-ends). Les trous sont comblés par la dernière valeur connue.
+ * Renvoie { days, cols } où cols[k][i] est la valeur de la série k au jour days[i].
+ */
+export function align(list) {
+  if (!list.length || list.some((s) => !s.length)) return { days: [], cols: list.map(() => []) };
+  const start = Math.max(...list.map((s) => dayOf(s[0].t)));
+  const set = new Set();
+  for (const s of list) for (const p of s) if (dayOf(p.t) >= start) set.add(dayOf(p.t));
+  const days = [...set].sort((a, b) => a - b);
+  const cols = list.map((s) => {
+    const col = new Array(days.length);
+    let j = 0;
+    for (let i = 0; i < days.length; i++) {
+      while (j + 1 < s.length && dayOf(s[j + 1].t) <= days[i]) j++;
+      col[i] = s[j].v;
+    }
+    return col;
+  });
+  return { days, cols };
+}
+
+/** Rendements hebdomadaires : gomme les décalages horaires entre places boursières. */
+export function weeklyReturns(days, col) {
+  const last = [];
+  let week = null;
+  for (let i = 0; i < days.length; i++) {
+    const w = Math.floor((days[i] + 3) / 7);
+    if (w !== week) last.push(col[i]);
+    else last[last.length - 1] = col[i];
+    week = w;
+  }
+  return logReturns(last);
+}
+
+export function corr(a, b) {
+  const n = Math.min(a.length, b.length);
+  if (n < 8) return null;
+  const x = a.slice(-n), y = b.slice(-n);
+  const mx = mean(x), my = mean(y);
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < n; i++) {
+    sxy += (x[i] - mx) * (y[i] - my);
+    sxx += (x[i] - mx) ** 2;
+    syy += (y[i] - my) ** 2;
+  }
+  return sxx && syy ? sxy / Math.sqrt(sxx * syy) : null;
+}
+
+/** Corrélations d'une série avec plusieurs autres, sur rendements hebdomadaires. */
+export function correlations(target, others) {
+  return others.map((o) => {
+    const { days, cols } = align([target, o]);
+    return corr(weeklyReturns(days, cols[0]), weeklyReturns(days, cols[1]));
+  });
+}
+
+export function corrMatrix(list) {
+  const { days, cols } = align(list);
+  const w = cols.map((c) => weeklyReturns(days, c));
+  return w.map((a, i) => w.map((b, j) => (i === j ? 1 : corr(a, b))));
+}
+
+/**
+ * Réaction d'un actif à un événement daté : variation le jour même, puis à 5 et 20 séances,
+ * toujours mesurée depuis la clôture précédant l'événement.
+ * unit : 'pct' (variation relative), 'pts' (écart en points) ou 'bp' (écart en points de base).
+ */
+export function reaction(pts, day, unit = 'pct') {
+  const i = pts.findIndex((p) => dayOf(p.t) >= day);
+  if (i < 1 || dayOf(pts[i].t) - day > 4) return null;
+  const base = pts[i - 1].v;
+  const at = (k) => {
+    if (i + k >= pts.length) return null;
+    const v = pts[i + k].v;
+    return unit === 'pct' ? v / base - 1 : unit === 'bp' ? (v - base) * 100 : v - base;
+  };
+  return { d0: at(0), d5: at(5), d20: at(20) };
+}
+
+/** Mensualité d'un prêt à taux fixe pour 1 unité empruntée (taux annuel en %, durée en années). */
+export function annuity(ratePct, years) {
+  const r = ratePct / 1200, n = years * 12;
+  return r === 0 ? 1 / n : r / (1 - (1 + r) ** -n);
+}
+
+// ---------------------------------------------------------------------------
+// Portefeuille
+// ---------------------------------------------------------------------------
+
+/**
+ * Analyse d'un portefeuille. rows : [{ qty, pts (devise d'affichage), local (devise de cotation) }].
+ * `since` = timestamp de début de la période étudiée.
+ * Sépare ce qui vient des actifs eux-mêmes de ce qui vient des taux de change.
+ */
+export function portfolio(rows, since) {
+  const n = rows.length;
+  const { days, cols } = align([...rows.map((r) => r.pts), ...rows.map((r) => r.local)]);
+  if (days.length < 3) return null;
+  const conv = cols.slice(0, n), local = cols.slice(n);
+  const end = days.length - 1;
+  let s = days.findIndex((d) => d >= dayOf(since));
+  if (s < 0 || s >= end) s = Math.max(0, end - 1);
+
+  const value = days.map((_, i) => rows.reduce((acc, r, k) => acc + r.qty * conv[k][i], 0));
+  // Valeur finale si les taux de change étaient restés ceux du début de période
+  const frozen = rows.reduce((acc, r, k) => acc + r.qty * local[k][end] * (conv[k][s] / local[k][s]), 0);
+  const total = value[end], start = value[s];
+  const change = total / start - 1;
+  const assetEffect = frozen / start - 1;
+
+  const lines = rows.map((r, k) => ({
+    value: r.qty * conv[k][end],
+    weight: (r.qty * conv[k][end]) / total,
+    change: conv[k][end] / conv[k][s] - 1,
+    localChange: local[k][end] / local[k][s] - 1,
+    contribution: (r.qty * (conv[k][end] - conv[k][s])) / start,
+    price: conv[k][end],
+    localPrice: local[k][end],
+  }));
+
+  // Risque sur l'historique disponible, à composition constante
+  const rets = [];
+  for (let i = 1; i < value.length; i++) rets.push(value[i] / value[i - 1] - 1);
+  const years = (days[end] - days[0]) / 365.25 || 1;
+  const vol = std(rets) * Math.sqrt(rets.length / years);
+  const worstDay = Math.min(...rets);
+  const worstAt = days[rets.indexOf(worstDay) + 1] * 86400;
+
+  // Diversification : corrélation moyenne pondérée entre lignes, et nombre « effectif » de lignes
+  const w = conv.map((c) => weeklyReturns(days, c));
+  let num = 0, den = 0;
+  for (let a = 0; a < n; a++)
+    for (let b = a + 1; b < n; b++) {
+      const c = corr(w[a], w[b]);
+      if (c == null) continue;
+      num += lines[a].weight * lines[b].weight * c;
+      den += lines[a].weight * lines[b].weight;
+    }
+  return {
+    total, change, assetEffect, fxEffect: change - assetEffect, lines,
+    series: days.map((d, i) => ({ t: d * 86400, v: value[i] })),
+    startT: days[s] * 86400,
+    vol, worstDay, worstAt, drawdown: maxDrawdown(value),
+    avgCorr: den ? num / den : null,
+    effective: 1 / lines.reduce((acc, l) => acc + l.weight ** 2, 0),
+  };
+}
