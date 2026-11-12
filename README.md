@@ -58,10 +58,29 @@ Puis ouvrir http://localhost:5173. Le serveur local relaie les requêtes vers le
 (les navigateurs bloquent les appels directs ; l'APK, lui, les fait en natif).
 `npm run build && npm run preview` sert la version optimisée de la même façon.
 
-## Obtenir l'APK
+## Obtenir l'APK et les mises à jour
 
-**Sans rien installer** : chaque push sur `main` déclenche le workflow GitHub Actions « APK Android ».
-L'APK se télécharge dans l'onglet *Actions* du dépôt, artefact `bacus-apk`.
+Chaque push sur `main` déclenche le workflow GitHub Actions « APK Android », qui publie une
+[Release](https://github.com/clementsellier/BACUS/releases/latest) contenant :
+
+| Fichier | Rôle |
+| --- | --- |
+| `bacus.apk` | l'application à installer sur Android |
+| `bacus-web.zip` | le paquet de mise à jour à distance |
+| `version.json` | le numéro de la dernière version, lu par l'application |
+
+**Mises à jour à distance** : au lancement puis toutes les heures, l'application lit `version.json`. Si seule la
+partie web a changé (écrans, données, calculs), elle télécharge le paquet en arrière-plan et l'applique au
+lancement suivant, ou tout de suite via « Redémarrer maintenant ». Si la nouvelle version plante au démarrage,
+elle revient d'elle-même à la précédente. Si la partie Android a changé, elle propose le nouvel APK.
+
+**Niveau natif** : `native-level.txt` doit être augmenté de 1 chaque fois que la partie Android change (ajout
+d'un module natif Capacitor, modification de `android/`). La version affichée est « niveau.fabrication ».
+
+**Signature** : l'APK est signé avec une clé fixe, fournie au workflow par deux secrets du dépôt :
+`BACUS_KEYSTORE_BASE64` (le fichier `.p12` encodé en base64) et `BACUS_KEYSTORE_PASSWORD`. Sans clé identique
+d'une version à l'autre, Android refuse d'installer une mise à jour. La clé n'est pas dans le dépôt : en garder une
+copie de sauvegarde.
 
 **En local** (JDK 21 et Android SDK requis) :
 
@@ -69,9 +88,6 @@ L'APK se télécharge dans l'onglet *Actions* du dépôt, artefact `bacus-apk`.
 npm run android:sync
 cd android && ./gradlew assembleDebug
 ```
-
-L'APK est produit dans `android/app/build/outputs/apk/debug/`.
-Il s'agit d'un APK de débogage, installable directement ; une publication sur le Play Store demanderait une signature.
 
 ## Projection : ce qu'elle vaut
 
@@ -89,6 +105,7 @@ src/lib/analytics.js   indicateurs, projection, corrélations, réaction aux cho
 src/lib/state.svelte.js réglages, favoris et portefeuille conservés sur l'appareil
 src/lib/news.js        flux RSS, étiquetage par facteur, recherche des causes
 src/lib/live.svelte.js fil en direct, alertes, détecteur de mouvements inhabituels
+src/lib/update.svelte.js mise à jour à distance
 src/pages/             un fichier par onglet
 src/components/        graphique, fiche détaillée, lignes et filtres
 android/               projet Android généré par Capacitor

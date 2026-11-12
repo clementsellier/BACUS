@@ -1,9 +1,20 @@
 name: APK Android
 
+# À chaque push sur main : compile l'application, signe l'APK avec la clé fixe et publie une Release
+# contenant l'APK, le paquet de mise à jour à distance (bacus-web.zip) et version.json, que l'application
+# consulte au lancement pour se mettre à jour toute seule.
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   apk:
@@ -18,15 +29,62 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+
+      - name: Numéro de version
+        run: |
+          echo "BACUS_BUILD=${{ github.run_number }}" >> "$GITHUB_ENV"
+          echo "NATIVE_LEVEL=$(tr -d '[:space:]' < native-level.txt)" >> "$GITHUB_ENV"
+
       - run: npm ci
       - run: npm run build
       - run: npx cap sync android
+
+      - name: Clé de signature
+        env:
+          KEYSTORE_B64: ${{ secrets.BACUS_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::Secret BACUS_KEYSTORE_BASE64 absent : ajoutez-le dans Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/bacus.p12"
+          echo "BACUS_KEYSTORE=$RUNNER_TEMP/bacus.p12" >> "$GITHUB_ENV"
+
       - name: Compiler l'APK
         working-directory: android
+        env:
+          BACUS_KEYSTORE_PASSWORD: ${{ secrets.BACUS_KEYSTORE_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-      - uses: actions/upload-artifact@v4
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Préparer la publication
+        run: |
+          mkdir out
+          cp android/app/build/outputs/apk/release/app-release.apk out/bacus.apk
+          (cd dist && zip -qr ../out/bacus-web.zip .)
+          base="https://github.com/${{ github.repository }}/releases/download/build-${BACUS_BUILD}"
+          cat > out/version.json <<EOF
+          {
+            "build": ${BACUS_BUILD},
+            "nativeLevel": ${NATIVE_LEVEL},
+            "version": "${NATIVE_LEVEL}.${BACUS_BUILD}",
+            "web": "${base}/bacus-web.zip",
+            "apk": "${base}/bacus.apk",
+            "commit": "${GITHUB_SHA::7}",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          cat out/version.json
+
+      - name: Publier la Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: bacus-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          tag_name: build-${{ github.run_number }}
+          name: BACUS ${{ env.NATIVE_LEVEL }}.${{ github.run_number }}
+          body: ${{ github.event.head_commit.message }}
+          make_latest: true
+          files: |
+            out/bacus.apk
+            out/bacus-web.zip
+            out/version.json

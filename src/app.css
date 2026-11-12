@@ -335,3 +335,5 @@ h1.title { font-size: 22px; font-weight: 750; letter-spacing: -0.01em; }
 .toast .x { color: var(--muted); font-size: 18px; line-height: 1; padding: 0 2px; }
 
 .card.demo { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 7%, var(--surface)); }
+
+.card.update { display: flex; align-items: center; gap: 10px 12px; flex-wrap: wrap; border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }

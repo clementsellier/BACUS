@@ -62,6 +62,8 @@ function relay() {
 export default defineConfig({
   plugins: [svelte(), relay()],
   base: './',
+  // Numéro de fabrication (GitHub Actions) : sert à savoir si une mise à jour à distance est plus récente.
+  define: { __BUILD__: JSON.stringify(Number(process.env.BACUS_BUILD || 0)) },
   server: { port: 5173 },
   build: { target: 'es2020' },
 });

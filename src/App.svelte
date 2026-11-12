@@ -13,6 +13,7 @@
   import { clearCache } from './lib/net.js';
   import { live, startLive, pollNow, unread, dismiss } from './lib/live.svelte.js';
   import { untrack } from 'svelte';
+  import { update, startUpdates, applyNow, BUILD } from './lib/update.svelte.js';
 
   const TABS = [
     { id: 'overview', label: 'Aperçu', icon: 'overview', page: Overview },
@@ -38,6 +39,8 @@
   }
 
   startLive();
+  startUpdates();
+  let updateHidden = $state(false);
   const fresh = $derived(unread());
 
   // Entrée sur l'onglet Actualités : les articles parus depuis le dernier passage sont marqués « Nouveau ».
@@ -92,6 +95,7 @@
     {@render tabs()}
     <div class="foot muted small">
       Données : Yahoo Finance, CoinGecko, BIS/FRED, BCE, flux RSS. Informations indicatives, pas un conseil en investissement.
+      <br />Version {BUILD ? (update.native ? update.native.split('.')[0] + '.' : '') + BUILD : 'de développement'}
     </div>
   </nav>
 
@@ -126,6 +130,24 @@
     </header>
 
     <main class="page">
+      {#if update.state !== 'idle' && !updateHidden}
+        <div class="card update">
+          {#if update.state === 'ready'}
+            <span style="flex:1;min-width:200px">
+              <b>Mise à jour {update.version} prête.</b>
+              <span class="muted">Elle s’appliquera au prochain lancement.</span>
+            </span>
+            <button class="btn" onclick={applyNow}>Redémarrer maintenant</button>
+          {:else}
+            <span style="flex:1;min-width:200px">
+              <b>Nouvelle version {update.version} de l’application.</b>
+              <span class="muted">Elle demande une réinstallation ; vos données sont conservées.</span>
+            </span>
+            <a class="btn" href={update.apk}>Télécharger</a>
+          {/if}
+          <button class="chip" onclick={() => (updateHidden = true)}>Plus tard</button>
+        </div>
+      {/if}
       {#key version}
         <Page />
       {/key}

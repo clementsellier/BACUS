@@ -1,5 +1,12 @@
 apply plugin: 'com.android.application'
 
+// Numéro de fabrication (GitHub Actions) et niveau natif : la version affichée est « niveau.fabrication ».
+// Le niveau natif (native-level.txt) n'augmente que si la partie Android change (nouveau module natif) :
+// l'application sait alors qu'une simple mise à jour à distance ne suffit pas et propose le nouvel APK.
+def bacusBuild = (System.getenv('BACUS_BUILD') ?: '1') as Integer
+def nativeLevel = rootProject.file('../native-level.txt').text.trim()
+def keystore = System.getenv('BACUS_KEYSTORE')
+
 android {
     namespace = "com.bacus.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +14,8 @@ android {
         applicationId "com.bacus.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode bacusBuild
+        versionName "${nativeLevel}.${bacusBuild}"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +23,21 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (keystore) {
+                // Clé fixe : indispensable pour qu'Android accepte d'installer une version par-dessus la précédente.
+                storeFile file(keystore)
+                storeType 'pkcs12'
+                storePassword System.getenv('BACUS_KEYSTORE_PASSWORD')
+                keyAlias 'bacus'
+                keyPassword System.getenv('BACUS_KEYSTORE_PASSWORD')
+            }
+        }
+    }
     buildTypes {
         release {
+            signingConfig keystore ? signingConfigs.release : signingConfigs.debug
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
