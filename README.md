@@ -8,7 +8,8 @@ avec projection statistique et recherche des causes des mouvements de cours.
 - **Marchés** — actions et indices (liste ou carte de chaleur, palmarès des secteurs), 50 premières cryptomonnaies,
   immobilier (prix des logements par pays, foncières cotées, pouvoir d'achat immobilier).
 - **Portefeuille** — vos lignes additionnées dans une seule devise, répartition, risque et diversification.
-- **Analyse** — comparaison base 100 et corrélations, onde de choc d'un événement, carte risque / rendement.
+- **Analyse** — comparaison base 100 et corrélations, onde de choc d'un événement, carte risque / rendement,
+  scanner des figures en chandeliers apparues ces 3 dernières séances.
 - **Actualités** — fil en direct (32 sources relues chaque minute), mots-clés surveillés avec alertes, détecteur de
   mouvements de prix inhabituels, de quoi parle-t-on en ce moment, actifs exposés à chaque facteur.
 - **Recherche** (loupe) — n'importe quelle action, ETF, indice ou crypto référencé par Yahoo Finance.
@@ -25,6 +26,7 @@ Filtres globaux : région du monde, devise d'affichage (EUR, USD, GBP, CHF, JPY)
 | Mes lignes se protègent-elles vraiment les unes les autres ? | Portefeuille, Analyse › Comparer |
 | Quand un événement frappe, comment réagit chaque marché, et dans quel ordre de grandeur ? | Analyse › Onde de choc |
 | À quoi cette valeur est-elle sensible : taux, pétrole, dollar, peur du marché ? | Fiche d'un actif |
+| Cette figure en chandeliers annonce-t-elle vraiment quelque chose sur cette valeur ? | Fiche d'un actif › Bougies, Analyse › Bougies |
 | Les prix de l'immobilier montent peu, mais puis-je encore acheter ? | Marchés › Immobilier › Pouvoir d'achat |
 | De quoi parle la presse, et quels actifs sont concernés ? | Actualités |
 | Que se passe-t-il en ce moment, et pourquoi ce marché décroche-t-il ? | Actualités › fil en direct, mouvements inhabituels |
@@ -102,6 +104,7 @@ statistique du passé : elle ignore les événements à venir et ne constitue pa
 src/lib/catalog.js     actifs suivis, régions, devises, facteurs, panel de l'onde de choc
 src/lib/data.js        cotations, historiques, recherche, taux de crédit, conversion de devise
 src/lib/analytics.js   indicateurs, projection, corrélations, réaction aux chocs, calcul du portefeuille
+src/lib/candles.js     figures en chandeliers et statistiques de ce qui les a suivies
 src/lib/state.svelte.js réglages, favoris et portefeuille conservés sur l'appareil
 src/lib/news.js        flux RSS, étiquetage par facteur, recherche des causes
 src/lib/live.svelte.js fil en direct, alertes, détecteur de mouvements inhabituels

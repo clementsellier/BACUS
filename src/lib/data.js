@@ -317,3 +317,114 @@ function dedupeDaily(points) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Bougies (chandeliers japonais) : ouverture, plus haut, plus bas, clôture et volume de chaque séance.
+
+const YC = 'https://query1.finance.yahoo.com/v8/finance/chart/';
+
+/** Équivalent Yahoo d'un actif (les cryptos CoinGecko sont cotées sous SYMBOLE-USD). */
+export function candleAsset(asset) {
+  if (!asset || asset.kind === 'housing') return null;
+  if (asset.kind === 'crypto') return { id: asset.id, s: `${String(asset.s).toUpperCase()}-USD`, cur: 'USD', kind: 'coin' };
+  return asset;
+}
+
+async function yohlc(sym, range, interval, ttl) {
+  const d = await get(`${YC}${encodeURIComponent(sym)}?range=${range}&interval=${interval}`, { ttl });
+  const r = d?.chart?.result?.[0];
+  if (!r?.timestamp) throw new Error('Bougies indisponibles pour cet actif.');
+  const q = r.indicators?.quote?.[0] ?? {};
+  const out = [];
+  for (let k = 0; k < r.timestamp.length; k++) {
+    const o = q.open?.[k], h = q.high?.[k], l = q.low?.[k], c = q.close?.[k];
+    if ([o, h, l, c].every((x) => x != null && Number.isFinite(x)) && h > 0 && h >= l) {
+      out.push({ t: r.timestamp[k], o, h: Math.max(h, o, c), l: Math.min(l, o, c), c, v: q.volume?.[k] ?? 0 });
+    }
+  }
+  if (out.length < 2) throw new Error('Bougies indisponibles pour cet actif.');
+  return out;
+}
+
+/** Une seule bougie par jour (Yahoo ajoute parfois la séance en cours avec un autre horodatage). */
+function onePerDay(cs) {
+  const out = [];
+  for (const c of cs) {
+    const d = Math.floor(c.t / DAY);
+    if (out.length && Math.floor(out[out.length - 1].t / DAY) === d) out[out.length - 1] = c;
+    else out.push(c);
+  }
+  return out;
+}
+
+/** Regroupe des bougies journalières en bougies hebdomadaires (semaine du lundi au dimanche). */
+export function weekly(cs) {
+  const out = [];
+  let key = null;
+  for (const c of cs) {
+    const k = Math.floor((Math.floor(c.t / DAY) + 3) / 7); // le 1er janvier 1970 était un jeudi
+    if (k !== key) {
+      out.push({ ...c });
+      key = k;
+    } else {
+      const w = out[out.length - 1];
+      w.h = Math.max(w.h, c.h);
+      w.l = Math.min(w.l, c.l);
+      w.c = c.c;
+      w.v += c.v;
+    }
+  }
+  return out;
+}
+
+/**
+ * Bougies d'un actif dans la devise choisie.
+ * intraday : '1d' (bougies de 5 min) ou '5d' (30 min) ; sinon bougies journalières sur 10 ans.
+ */
+export async function candles(asset, cur, intraday = null) {
+  const a = candleAsset(asset);
+  if (!a) throw new Error('Pas de bougies pour cet actif.');
+  const [range, interval, ttl] = intraday === '1d' ? ['1d', '5m', 60] : intraday === '5d' ? ['5d', '30m', 120] : ['10y', '1d', 1800];
+  let cs = await yohlc(a.s, range, interval, ttl);
+  if (interval === '1d') cs = onePerDay(cs);
+  let shown = a.kind === 'index' || !a.cur ? null : baseCur(a.cur);
+  let k = unit(a.cur);
+  let fx = null;
+  if (needsFx(a, cur)) {
+    const fxS = fxSymbol(baseCur(a.cur), cur);
+    const raw = await spark([fxS], intraday ? '5d' : '10y', intraday ? '1h' : '1d', intraday ? 300 : 3600);
+    fx = toPoints(raw[fxS]);
+    if (fx.length) shown = cur;
+    else fx = null;
+  }
+  if (fx || k !== 1) {
+    let j = 0;
+    cs = cs.map((c) => {
+      if (fx) while (j + 1 < fx.length && fx[j + 1].t <= c.t) j++;
+      const m = k * (fx ? fx[j].v : 1);
+      return { t: c.t, o: c.o * m, h: c.h * m, l: c.l * m, c: c.c * m, v: c.v };
+    });
+  }
+  return { candles: cs, cur: shown };
+}
+
+/** Bougies journalières (2 ans, devise de cotation) d’une liste d’actifs, 6 requêtes à la fois : sert au scanner de figures. */
+export async function candlesMany(assets) {
+  const res = new Map();
+  let next = 0;
+  const worker = async () => {
+    while (next < assets.length) {
+      const a = assets[next++];
+      const ca = candleAsset(a);
+      if (!ca) continue;
+      try {
+        let cs = onePerDay(await yohlc(ca.s, '2y', '1d', 1800));
+        res.set(a.id, cs);
+      } catch {
+        /* actif ignoré */
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+  return res;
+}

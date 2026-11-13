@@ -87,7 +87,7 @@
       {#if live.watched}<span class="muted small">{live.watched} actifs surveillés</span>{/if}
     </div>
     {#each live.moves as m (m.id + m.at)}
-      <div class="move">
+      <div class="jolt">
         <div>
           <span class="name">{m.name}</span>
           <b class="num {dir(m.change)}">{pct(m.change, 1)}</b>

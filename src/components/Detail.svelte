@@ -1,10 +1,12 @@
 <script>
   import Chart from './Chart.svelte';
+  import CandleChart from './CandleChart.svelte';
   import Chips from './Chips.svelte';
   import Icon from './Icon.svelte';
   import { settings, closeDetail, toggleFav, addCompare, addPosition, goTab } from '../lib/state.svelte.js';
   import { FACTORS, COINS } from '../lib/catalog.js';
-  import { loadDetail, detailRanges, history } from '../lib/data.js';
+  import { loadDetail, detailRanges, history, candles as loadCandles, candleAsset, weekly } from '../lib/data.js';
+  import { detect, patternStats, recent, PATTERNS, VERDICTS } from '../lib/candles.js';
   import { rsi, annVol, maxDrawdown, trend, bigMoves, forecast, backtest, correlations } from '../lib/analytics.js';
   import { causes } from '../lib/news.js';
   import { price, pct, dir, date } from '../lib/format.js';
@@ -141,6 +143,87 @@
       .catch(() => {});
     return () => (stale = true);
   });
+  // ---------- Bougies (chandeliers japonais) ----------
+  const canCandle = !!candleAsset(asset);
+  let style = $state(canCandle && settings.chartStyle === 'candle' ? 'candle' : 'line');
+  function setStyle(v) {
+    style = v;
+    settings.chartStyle = v;
+  }
+  let daily = $state(null); // bougies journalières sur 10 ans : figures et statistiques
+  let dailyErr = $state(false);
+  $effect(() => {
+    if (!canCandle) return;
+    const c = settings.currency;
+    let stale = false;
+    dailyErr = false;
+    loadCandles(asset, c)
+      .then((d) => { if (!stale) daily = d; })
+      .catch(() => { if (!stale) dailyErr = true; });
+    return () => (stale = true);
+  });
+  let intra = $state(null);
+  let intraErr = $state(false);
+  $effect(() => {
+    const r = range, c = settings.currency;
+    intra = null;
+    intraErr = false;
+    if (!canCandle || style !== 'candle' || (r !== '1d' && r !== '5d')) return;
+    let stale = false;
+    loadCandles(asset, c, r)
+      .then((d) => { if (!stale) intra = d; })
+      .catch(() => { if (!stale) intraErr = true; });
+    return () => (stale = true);
+  });
+
+  const isIntra = $derived(range === '1d' || range === '5d');
+  const shownCandles = $derived.by(() => {
+    if (style !== 'candle') return null;
+    if (isIntra) return intra?.candles ?? null;
+    if (!daily) return null;
+    const cs = daily.candles;
+    const end = cs[cs.length - 1].t;
+    if (range === '5y') return weekly(cs.filter((k) => k.t >= end - 5 * 365.25 * 86400));
+    const span = ({ '1mo': 31, '3mo': 92, '1y': 366 }[range] ?? 366) * 86400;
+    return cs.filter((k) => k.t >= end - span);
+  });
+  const candleFail = $derived(style === 'candle' && (isIntra ? intraErr : dailyErr));
+  const candleWait = $derived(style === 'candle' && !shownCandles && !candleFail);
+
+  const hits = $derived(daily ? detect(daily.candles) : []);
+  const marks = $derived.by(() => {
+    if (!shownCandles || isIntra || range === '5y') return [];
+    const from = shownCandles[0].t;
+    return hits
+      .filter((x) => x.t >= from && PATTERNS[x.id].dir !== 0)
+      .map((x) => ({ t: x.t, dir: PATTERNS[x.id].dir, label: range === '1mo' && window.innerWidth >= 700 ? PATTERNS[x.id].label : '' }));
+  });
+  const daysWord = asset.kind === 'crypto' || asset.kind === 'coin';
+  const CH = daysWord
+    ? [{ id: 5, label: '5 jours' }, { id: 10, label: '10 jours' }, { id: 20, label: '20 jours' }]
+    : [{ id: 5, label: '1 semaine' }, { id: 10, label: '2 semaines' }, { id: 20, label: '1 mois' }];
+  let ch = $state(5);
+  const chLong = $derived(CH.find((x) => x.id === ch).label);
+  const pstats = $derived(daily && daily.candles.length > 60 ? patternStats(daily.candles, hits, ch) : null);
+  const latest = $derived(daily ? recent(daily.candles, hits, 10).slice(0, 4) : []);
+  const years = $derived(daily ? Math.max(1, Math.round((daily.candles[daily.candles.length - 1].t - daily.candles[0].t) / (365.25 * 86400))) : 0);
+  const reliability = $derived(pstats ? Object.entries(pstats.stats).filter(([, x]) => x.n > 0).sort((a, b) => b[1].n - a[1].n) : []);
+  const pp = (x) => (x * 100).toFixed(0) + ' %';
+  const gap = (x) => {
+    const v = Math.round(x * 100);
+    return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v) + ' pt';
+  };
+  const arrow = (d) => (d > 0 ? '▲' : d < 0 ? '▼' : '●');
+  const arrowCls = (d) => (d > 0 ? 'up' : d < 0 ? 'down' : 'muted');
+  const verdictTag = (v) => (VERDICTS[v].cls === 'up' ? 'new' : VERDICTS[v].cls === 'down' ? 'hot' : '');
+  function sessionsAgo(i) {
+    const k = daily.candles.length - 1 - i;
+    if (k === 0) return daysWord ? 'dernier jour' : 'dernière séance';
+    if (k === 1) return daysWord ? 'la veille' : 'séance précédente';
+    return `il y a ${k} ${daysWord ? 'jours' : 'séances'}`;
+  }
+  const shortName = asset.name.split(/ [—(]/)[0];
+
   const strength = (c) => (Math.abs(c) >= 0.6 ? 'fortement' : Math.abs(c) >= 0.3 ? 'modérément' : 'faiblement');
 </script>
 
@@ -187,21 +270,41 @@
       <div class="toolbar">
         <Chips options={ranges} bind:value={range} label="Période" />
         <span class="spacer"></span>
+        {#if canCandle}
+          <div class="seg" role="group" aria-label="Type de graphique">
+            <button class:on={style === 'line'} onclick={() => setStyle('line')}>Courbe</button>
+            <button class:on={style === 'candle'} onclick={() => setStyle('candle')}>Bougies</button>
+          </div>
+        {/if}
         {#if !data.intraday && fc}
           <button class="chip" class:on={showFc} onclick={() => (showFc = !showFc)}>Projection</button>
         {/if}
       </div>
 
       <div class="card" style="padding:10px 6px 6px; opacity:{loading ? 0.5 : 1}">
-        <Chart points={data.points} fc={overlay} markers={moves} intraday={data.intraday} rising={change >= 0} />
-        <div class="legend" style="padding:6px 10px 4px">
-          <span><i style="color:var(--{change >= 0 ? 'up' : 'down'})"></i>Cours</span>
-          {#if overlay}
-            <span><i class="dash" style="color:var(--accent)"></i>Scénario médian</span>
-            <span><i class="dash" style="color:var(--muted)"></i>Intervalle 80 %</span>
-          {/if}
-          {#if moves.length}<span>● Mouvements marquants</span>{/if}
-        </div>
+        {#if style === 'candle' && shownCandles}
+          <CandleChart candles={shownCandles} {marks} fc={range === '1mo' ? null : overlay} intraday={isIntra} />
+          <div class="legend" style="padding:6px 10px 4px">
+            <span><i style="color:var(--up)"></i>Clôture au-dessus de l’ouverture</span>
+            <span><i style="color:var(--down)"></i>En dessous</span>
+            {#if marks.length}<span><b class="up">▲</b> / <b class="down">▼</b> Figure de hausse / de baisse</span>{/if}
+            {#if range === '5y'}<span>Une bougie par semaine</span>{/if}
+            {#if overlay && range !== '1mo'}<span><i class="dash" style="color:var(--accent)"></i>Scénario médian</span>{/if}
+          </div>
+        {:else if candleWait}
+          <div class="skel" style="height:300px"></div>
+        {:else}
+          <Chart points={data.points} fc={overlay} markers={moves} intraday={data.intraday} rising={change >= 0} />
+          <div class="legend" style="padding:6px 10px 4px">
+            <span><i style="color:var(--{change >= 0 ? 'up' : 'down'})"></i>Cours</span>
+            {#if overlay}
+              <span><i class="dash" style="color:var(--accent)"></i>Scénario médian</span>
+              <span><i class="dash" style="color:var(--muted)"></i>Intervalle 80 %</span>
+            {/if}
+            {#if moves.length}<span>● Mouvements marquants</span>{/if}
+            {#if candleFail}<span>Bougies indisponibles pour cet actif : courbe affichée.</span>{/if}
+          </div>
+        {/if}
       </div>
       {#if error}<div class="note">{error}</div>{/if}
 
@@ -236,6 +339,68 @@
             <span class="v num" style="font-size:14.5px">{fmt(ind.hi)}</span>
             <span class="muted small num">{fmt(ind.lo)}</span>
           </div>
+        </div>
+      {/if}
+
+      {#if canCandle && pstats}
+        <div class="card">
+          <div class="section-title">
+            <h2>Lecture des bougies</h2>
+            <Chips options={CH} bind:value={ch} label="Horizon" />
+          </div>
+          {#each latest as x (x.i + x.id)}
+            {@const P = PATTERNS[x.id]}
+            {@const st = pstats.stats[x.id]}
+            <div class="figure">
+              <div class="figure-head">
+                <b class={arrowCls(P.dir)}>{arrow(P.dir)}</b>
+                <b>{P.label}</b>
+                <span class="muted small">{sessionsAgo(x.i)} · {date(x.t)}</span>
+              </div>
+              <p class="muted small">{P.text}</p>
+              {#if st.n}
+                <p class="small">
+                  Sur {years} ans de {shortName}, cette figure est apparue <b>{st.n} fois</b>. {chLong} plus tard, le cours
+                  était plus haut dans <b>{pp(st.pUp)}</b> des cas, contre {pp(pstats.base.pUp)} en temps normal ;
+                  variation moyenne <b class={dir(st.mean)}>{pct(st.mean, 1)}</b>.
+                  <span class="tag {verdictTag(st.verdict)}">{VERDICTS[st.verdict].label}</span>
+                </p>
+              {/if}
+            </div>
+          {:else}
+            <p class="muted small">Aucune figure classique sur les 10 {daysWord ? 'derniers jours' : 'dernières séances'}.</p>
+          {/each}
+
+          {#if reliability.length}
+            <details class="reliab">
+              <summary>Fiabilité de chaque figure sur {shortName} ({years} ans, à {chLong})</summary>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead>
+                    <tr><th>Figure</th><th>Fois</th><th>Hausse ensuite</th><th>Écart à la normale</th><th>Moyenne</th><th>Verdict</th></tr>
+                  </thead>
+                  <tbody>
+                    {#each reliability as [id, st] (id)}
+                      <tr>
+                        <td><b class={arrowCls(PATTERNS[id].dir)}>{arrow(PATTERNS[id].dir)}</b> {PATTERNS[id].label}</td>
+                        <td class="num">{st.n}</td>
+                        <td class="num">{pp(st.pUp)}</td>
+                        <td class="num">{gap(st.pUp - pstats.base.pUp)}</td>
+                        <td class="num {dir(st.mean)}">{pct(st.mean, 1)}</td>
+                        <td class={VERDICTS[st.verdict].cls}>{VERDICTS[st.verdict].label}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          {/if}
+          <p class="muted small" style="margin-top:8px">
+            Bougies journalières sur {years} ans ({daily.candles.length} {daysWord ? 'jours' : 'séances'}). « En temps normal » :
+            part de toutes les {daysWord ? 'journées' : 'séances'} suivies d’une hausse à {chLong} ({pp(pstats.base.pUp)}).
+            Une figure n’est qu’un indice : sur les grands marchés, beaucoup ne font guère mieux que le hasard, d’où l’intérêt
+            de vérifier actif par actif. Ce n’est pas un conseil d’investissement.
+          </p>
         </div>
       {/if}
 

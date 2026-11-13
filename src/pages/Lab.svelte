@@ -2,7 +2,8 @@
   import MultiChart from '../components/MultiChart.svelte';
   import { settings, ui, findAsset, addCompare, openDetail } from '../lib/state.svelte.js';
   import { INDICES, STOCKS, REITS, COINS, MACRO, SHOCK_SET, CLASSES, PERIODS, inRegion } from '../lib/catalog.js';
-  import { history } from '../lib/data.js';
+  import { history, candlesMany } from '../lib/data.js';
+  import { detect, pooledStats, PATTERNS, VERDICTS } from '../lib/candles.js';
   import { align, corrMatrix, logReturns, maxDrawdown, bigMoves, reaction, dayOf } from '../lib/analytics.js';
   import { causes } from '../lib/news.js';
   import { pct, dir, date } from '../lib/format.js';
@@ -108,6 +109,51 @@
     const labelled = new Set([...byPerf.slice(0, 3), ...byPerf.slice(-2), [...dots].sort((p, q) => q.vol - p.vol)[0]].map((d) => d.a.id));
     return { dots, x, y, xt: ticks(0, xMax, 4), yt: ticks(yMin, yMax, 4), labelled };
   }
+
+  // ------------------------------------------------------------ Bougies : scanner de figures
+  const SCAN_H = [{ id: 5, label: '1 semaine' }, { id: 10, label: '2 semaines' }, { id: 20, label: '1 mois' }];
+  let scanH = $state(5);
+  let scanFilter = $state('all');
+  const scanAssets = $derived([
+    ...inRegion(INDICES, settings.region), ...inRegion(STOCKS, settings.region), ...COINS,
+    ...MACRO.filter((m) => m.id !== '^VIX'),
+  ]);
+  const scanLoad = $derived(
+    ui.lab === 'candles'
+      ? candlesMany(scanAssets).then((m) =>
+          scanAssets.filter((a) => m.get(a.id)?.length > 60).map((a) => {
+            const cs = m.get(a.id);
+            return { a, cs, hits: detect(cs) };
+          }),
+        )
+      : null,
+  );
+  const today = Math.floor(Date.now() / 86400000);
+  /** Figures apparues sur les 3 dernières bougies de chaque actif. */
+  function signals(series, pooled) {
+    const rows = [];
+    for (const s of series) {
+      const n = s.cs.length;
+      for (const x of s.hits) {
+        if (x.i < n - 3) continue;
+        const st = pooled.stats[x.id];
+        rows.push({ ...s, x, age: n - 1 - x.i, live: x.i === n - 1 && Math.floor(s.cs[n - 1].t / 86400) === today, st, dir: PATTERNS[x.id].dir });
+      }
+    }
+    const strength = (r) => (r.st.z == null ? 0 : (r.dir || 1) * r.st.z);
+    return rows
+      .filter((r) => scanFilter === 'all' || (scanFilter === 'up' ? r.dir > 0 : r.dir < 0))
+      .sort((p, q) => p.age - q.age || strength(q) - strength(p));
+  }
+  const pp = (x) => (x * 100).toFixed(0) + ' %';
+  const gap = (x) => {
+    const v = Math.round(x * 100);
+    return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v) + ' pt';
+  };
+  const arrow = (d) => (d > 0 ? '▲' : d < 0 ? '▼' : '●');
+  const arrowCls = (d) => (d > 0 ? 'up' : d < 0 ? 'down' : 'muted');
+  const verdictTag = (v) => (VERDICTS[v].cls === 'up' ? 'new' : VERDICTS[v].cls === 'down' ? 'hot' : '');
+  const ageText = (r) => (r.age === 0 ? (r.live ? 'séance en cours' : 'dernière séance') : r.age === 1 ? 'séance précédente' : 'il y a 2 séances');
 </script>
 
 <h1 class="title">Analyse</h1>
@@ -116,6 +162,7 @@
   <button class:on={ui.lab === 'compare'} onclick={() => (ui.lab = 'compare')}>Comparer</button>
   <button class:on={ui.lab === 'shock'} onclick={() => (ui.lab = 'shock')}>Onde de choc</button>
   <button class:on={ui.lab === 'map'} onclick={() => (ui.lab = 'map')}>Risque / rendement</button>
+  <button class:on={ui.lab === 'candles'} onclick={() => (ui.lab = 'candles')}>Bougies</button>
 </div>
 
 {#if ui.lab === 'compare'}
@@ -263,7 +310,7 @@
   {:catch}
     <div class="card error">Impossible de charger les historiques.</div>
   {/await}
-{:else}
+{:else if ui.lab === 'map'}
   <p class="muted">Chaque point est un actif : plus il est à droite, plus il a secoué ; plus il est haut, plus il a rapporté sur 1 an.</p>
   {#await mapLoad}
     <div class="skel" style="height:400px"></div>
@@ -313,5 +360,83 @@
     {/if}
   {:catch}
     <div class="card error">Impossible de charger les historiques.</div>
+  {/await}
+{:else if ui.lab === 'candles'}
+  <p class="muted">
+    Les figures en chandeliers apparues ces 3 dernières séances sur les valeurs suivies, et ce qui a suivi ces mêmes figures
+    par le passé sur l’ensemble de ces valeurs.
+  </p>
+  <div class="toolbar">
+    <div class="seg">
+      <button class:on={scanFilter === 'all'} onclick={() => (scanFilter = 'all')}>Toutes</button>
+      <button class:on={scanFilter === 'up'} onclick={() => (scanFilter = 'up')}>▲ Hausse</button>
+      <button class:on={scanFilter === 'down'} onclick={() => (scanFilter = 'down')}>▼ Baisse</button>
+    </div>
+    <span class="spacer"></span>
+    <span class="muted small">Résultat à</span>
+    <div class="chips">
+      {#each SCAN_H as h}<button class="chip" class:on={scanH === h.id} onclick={() => (scanH = h.id)}>{h.label}</button>{/each}
+    </div>
+  </div>
+  {#await scanLoad}
+    <div class="skel" style="height:260px"></div>
+    <p class="muted small">Lecture des bougies de {scanAssets.length} valeurs…</p>
+  {:then series}
+    {#if series?.length}
+      {@const pooled = pooledStats(series, scanH)}
+      {@const rows = signals(series, pooled)}
+      {@const hLabel = SCAN_H.find((h) => h.id === scanH).label}
+      <div class="card flush">
+        {#each rows as r (r.a.id + r.x.id + r.x.i)}
+          <button class="scan-row" onclick={() => openDetail(r.a)}>
+            <span style="min-width:0">
+              <span class="name">{short(r.a.name)}</span>
+              <span class="muted small"> · {ageText(r)}{#if r.live} (provisoire){/if}</span>
+              <span style="display:block" class="small">
+                <b class={arrowCls(r.dir)}>{arrow(r.dir)} {PATTERNS[r.x.id].label}</b>
+                {#if r.st.n}
+                  <span class="muted"> — par le passé, hausse à {hLabel} dans {pp(r.st.pUp)} des cas (normale {pp(pooled.base.pUp)}, {r.st.n} exemples)</span>
+                {/if}
+              </span>
+            </span>
+            {#if r.st.n}<span class="tag {verdictTag(r.st.verdict)}">{VERDICTS[r.st.verdict].label}</span>{/if}
+          </button>
+        {:else}
+          <div class="empty" style="padding:16px">Aucune figure classique ces 3 dernières séances avec ce filtre.</div>
+        {/each}
+      </div>
+
+      <details class="reliab card" open>
+        <summary>Quelles figures ont vraiment fonctionné ? ({series.length} valeurs, 2 ans, résultat à {hLabel})</summary>
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr><th>Figure</th><th>Fois</th><th>Hausse ensuite</th><th>Écart à la normale</th><th>Moyenne</th><th>Verdict</th></tr>
+            </thead>
+            <tbody>
+              {#each Object.entries(pooled.stats).filter(([, x]) => x.n > 0).sort((a, b) => PATTERNS[b[0]].dir - PATTERNS[a[0]].dir || b[1].n - a[1].n) as [id, st] (id)}
+                <tr>
+                  <td><b class={arrowCls(PATTERNS[id].dir)}>{arrow(PATTERNS[id].dir)}</b> {PATTERNS[id].label}</td>
+                  <td class="num">{st.n}</td>
+                  <td class="num">{pp(st.pUp)}</td>
+                  <td class="num">{gap(st.pUp - pooled.base.pUp)}</td>
+                  <td class="num {dir(st.mean)}">{pct(st.mean, 1)}</td>
+                  <td class={VERDICTS[st.verdict].cls}>{VERDICTS[st.verdict].label}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+        <p class="muted small" style="margin-top:8px">
+          « Normale » : part de toutes les séances suivies d’une hausse à {hLabel} ({pp(pooled.base.pUp)}), sur les mêmes valeurs.
+          Une figure n’« a fonctionné » que si l’écart est trop grand pour être dû au hasard. Les bougies de la séance en cours
+          sont provisoires : la figure peut disparaître d’ici la clôture. Ce n’est pas un conseil d’investissement.
+        </p>
+      </details>
+    {:else}
+      <div class="card error">Bougies indisponibles pour le moment.</div>
+    {/if}
+  {:catch}
+    <div class="card error">Impossible de charger les bougies.</div>
   {/await}
 {/if}

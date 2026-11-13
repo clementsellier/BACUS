@@ -24,6 +24,7 @@ export const settings = $state({
   compare: ['^GSPC', '^FCHI', 'GC=F', 'BTC-USD'],
   snapshot: null, // { at, cur, prices } : dernier relevé de cours
   watch: [], // mots-clés surveillés dans le fil d'actualités
+  chartStyle: 'line', // graphique de la fiche : courbe ou bougies
   newsReadAt: Date.now(), // dernier passage sur l'onglet Actualités (sert au compteur de nouveautés)
   ...saved,
 });
